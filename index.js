@@ -10,7 +10,7 @@ import cors from "cors";
 import compression from "compression";
 import mongoSanitize from "express-mongo-sanitize";
 import { body, param, query, validationResult } from "express-validator";
-import bcrypt from "bcrypt";
+import bcrypt from "bcrypt"; 
 import multer from "multer";
 import nodemailer from "nodemailer";
 import crypto from "crypto";
@@ -18,8 +18,10 @@ import morgan from "morgan";
 import { nanoid } from "nanoid";
 import session from "express-session";
 import MongoStore from "connect-mongo";
- const PHONE_PT = /^(\+?\d{2,3})?\s?\d{9,12}$/; 
+import cmsRoutes from "./routes/waveledCmsRoutes.js";
 import dns from "dns";
+
+const PHONE_PT = /^(\+?\d{2,3})?\s?\d{9,12}$/; 
 dns.setDefaultResultOrder?.("ipv4first"); 
 mongoose.set("bufferCommands", false);
 // ADD: no topo dos imports 
@@ -43,7 +45,8 @@ const upload = multer({
 });
 
  
-
+ 
+ 
 
 // --------------------------------- ENV ---------------------------------------
 const PORT =   4000;
@@ -57,8 +60,6 @@ const ALLOWED_ORIGINS = [
   "http://localhost:3001",
   "http://localhost:3000",
   "https://waveled.vercel.app",
-  "https://waveled1.vercel.app",
-  "https://waveled2.vercel.app",
   "https://waveled-pspo.vercel.app",
   "http://localhost:5174",
   "http://localhost:5176",
@@ -161,15 +162,15 @@ app.use(compression());
 
  
 app.use("/uploads", express.static(path.resolve(UPLOAD_DIR)));
-
+ 
 
 async function uploadFilesToCloudinary(files, folder = "waveled/images") {
   if (!files?.length) return [];
 
   const toUrl = (file) =>
     new Promise((resolve, reject) => { 
-      if (file.size > 2 * 1024 * 1024) {
-        return reject(new Error("Imagem excede 2MB"));
+      if (file.size > 4 * 1024 * 1024) {
+        return reject(new Error("Imagem excede 4MB"));
       }
 
       const stream = cloudinary.uploader.upload_stream(
@@ -264,6 +265,7 @@ const limiterStrict = rateLimit({ windowMs: 10 * 60 * 1000*1000, max: 8550 });
 const limiterAuth = rateLimit({ windowMs: 10 * 60 * 1000*1000, max: 5550 });
 const limiterLogin = rateLimit({ windowMs: 15 * 60 * 1000*1000, max: 1555 });
 const limiterPublicPost = rateLimit({ windowMs: 5 * 60 * 1000*1000, max: 4055 });
+app.use("/api/cms", cmsRoutes);
 
 const audit =
   (action) =>
@@ -1570,6 +1572,80 @@ app.get("/api/products", asyncH(async (req, res) => {
   const items = await query.sort({ wl_updated_at: -1, createdAt: -1 }).lean();
   return res.status(200).json({ data: items });
 }));
+ 
+ 
+app.post(
+  "/api/products",
+  requireAuth(["admin", "editor"]),
+  upload.array("images", 12),
+  body("name").isString().isLength({ min: 2 }).trim(),
+  body("category").optional().isString().isLength({ min: 1 }).trim(),
+  body("categories").optional(),
+  //   NOVO:
+  body("subcategories").optional(),
+
+  body("description_html").optional().isString(),
+  body("specs_text").optional().isString(),
+  body("datasheet_url").optional({ checkFalsy: true }).isURL().isLength({ max: 2048 }),
+  body("manual_url").optional({ checkFalsy: true }).isURL().isLength({ max: 2048 }),
+  body("sku").optional().isString().isLength({ max: 64 }),
+  body("link")
+    .optional({ checkFalsy: true })
+    .custom((v) => {
+      if (typeof v !== "string") return false;
+      const s = v.trim();
+      return /^https?:\/\//i.test(s) || s.startsWith("/");
+    })
+    .withMessage('O "link" deve ser uma URL (http/https) ou um caminho relativo a começar por "/".')
+    .isLength({ max: 2048 }),
+  validate,
+  audit("products.create"),
+  asyncH(async (req, res) => {
+    const images = await uploadFilesToCloudinary(req.files || []);
+
+    // Resolve categorias
+    const resolvedArray = await ensureCategories(req.body.categories);
+
+    // category única (retrocompat / principal)
+    let principal = null;
+    if (req.body.category) {
+      principal = await ensureCategory(req.body.category);
+      if (principal && !resolvedArray.find((c) => String(c._id) === String(principal._id))) {
+        resolvedArray.unshift(principal);
+      }
+    }
+
+    //   Resolve subcategorias
+    let subIds = [];
+    try {
+      subIds = await ensureSubCategories(req.body.subcategories);
+    } catch (e) {
+      return errJson(res, e.message || "Subcategorias inválidas", 422);
+    }
+
+    const p = await WaveledProduct.create({
+      wl_name: req.body.name,
+
+      wl_category: principal ? principal._id : (resolvedArray[0]?._id || undefined),
+      wl_categories: resolvedArray.map((c) => c._id),
+
+      //  NOVO:
+      wl_subcategories: subIds,
+
+      wl_description_html: req.body.description_html || "",
+      wl_specs_text: req.body.specs_text || "",
+      wl_datasheet_url: req.body.datasheet_url || "",
+      wl_manual_url: req.body.manual_url || "",
+      wl_sku: req.body.sku || undefined,
+      wl_images: images,
+
+      wl_link: (req.body.link || "").trim(),
+      wl_updated_at: new Date(),
+    });
+
+    ok(res, { id: p._id }, 201);
+  })
+);
 
  
 app.put(
@@ -1676,82 +1752,7 @@ async function ensureSubCategories(input) {
   }
   return rows.map((r) => r._id);
 }
-
-
  
-app.post(
-  "/api/products",
-  requireAuth(["admin", "editor"]),
-  upload.array("images", 12),
-  body("name").isString().isLength({ min: 2 }).trim(),
-  body("category").optional().isString().isLength({ min: 1 }).trim(),
-  body("categories").optional(),
-  //   NOVO:
-  body("subcategories").optional(),
-
-  body("description_html").optional().isString(),
-  body("specs_text").optional().isString(),
-  body("datasheet_url").optional({ checkFalsy: true }).isURL().isLength({ max: 2048 }),
-  body("manual_url").optional({ checkFalsy: true }).isURL().isLength({ max: 2048 }),
-  body("sku").optional().isString().isLength({ max: 64 }),
-  body("link")
-    .optional({ checkFalsy: true })
-    .custom((v) => {
-      if (typeof v !== "string") return false;
-      const s = v.trim();
-      return /^https?:\/\//i.test(s) || s.startsWith("/");
-    })
-    .withMessage('O "link" deve ser uma URL (http/https) ou um caminho relativo a começar por "/".')
-    .isLength({ max: 2048 }),
-  validate,
-  audit("products.create"),
-  asyncH(async (req, res) => {
-    const images = await uploadFilesToCloudinary(req.files || []);
-
-    // Resolve categorias
-    const resolvedArray = await ensureCategories(req.body.categories);
-
-    // category única (retrocompat / principal)
-    let principal = null;
-    if (req.body.category) {
-      principal = await ensureCategory(req.body.category);
-      if (principal && !resolvedArray.find((c) => String(c._id) === String(principal._id))) {
-        resolvedArray.unshift(principal);
-      }
-    }
-
-    //   Resolve subcategorias
-    let subIds = [];
-    try {
-      subIds = await ensureSubCategories(req.body.subcategories);
-    } catch (e) {
-      return errJson(res, e.message || "Subcategorias inválidas", 422);
-    }
-
-    const p = await WaveledProduct.create({
-      wl_name: req.body.name,
-
-      wl_category: principal ? principal._id : (resolvedArray[0]?._id || undefined),
-      wl_categories: resolvedArray.map((c) => c._id),
-
-      //  NOVO:
-      wl_subcategories: subIds,
-
-      wl_description_html: req.body.description_html || "",
-      wl_specs_text: req.body.specs_text || "",
-      wl_datasheet_url: req.body.datasheet_url || "",
-      wl_manual_url: req.body.manual_url || "",
-      wl_sku: req.body.sku || undefined,
-      wl_images: images,
-
-      wl_link: (req.body.link || "").trim(),
-      wl_updated_at: new Date(),
-    });
-
-    ok(res, { id: p._id }, 201);
-  })
-);
-
  
 
 // UPDATE: aceita "category" (principal) e/ou "categories" (lista completa)
@@ -3019,8 +3020,8 @@ app.post(
   asyncH(async (req, res) => {
     if (!req.file) return errJson(res, "Ficheiro ausente", 400);
 
-    if (req.file.size > 2 * 1024 * 1024) {
-      return errJson(res, "Imagem excede 2MB", 413);
+    if (req.file.size > 4 * 1024 * 1024) {
+      return errJson(res, "Imagem excede 4MB", 413);
     }
  
     const uploadOne = (file, folder = "waveled/uploads") =>
