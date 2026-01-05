@@ -41,6 +41,11 @@ export const requireAuth =
     next();
   };
 
+const asyncHandler =
+  (fn) =>
+  (req, res, next) =>
+    Promise.resolve(fn(req, res, next)).catch(next);
+
 const isObjId = (id) => mongoose.isValidObjectId(String(id || ""));
 
 async function uploadFilesToCloudinary(files, folder = "waveled/cms") {
@@ -85,48 +90,55 @@ function parseYouTubeId(input = "") {
  * TAB 1 — Vertical Solutions CRUD + reorder + favorites
  * ============================================================ */
 
-router.get("/vertical-solutions", async (req, res) => {
-  const onlyFeatured = String(req.query.featured || "") === "1";
-  const find = onlyFeatured ? { wl_featured_megamenu: true } : {};
+router.get(
+  "/vertical-solutions",
+  asyncHandler(async (req, res) => {
+    const onlyFeatured = String(req.query.featured || "") === "1";
+    const find = onlyFeatured ? { wl_featured_megamenu: true } : {};
 
-  const rows = await WaveledVerticalSolution.find(find)
-    .populate({
-      path: "wl_product",
-      select: "_id wl_name wl_link wl_images wl_category wl_categories",
-    })
-    .sort({ wl_featured_megamenu: -1, wl_order: 1, wl_updated_at: -1 })
-    .lean();
+    const rows = await WaveledVerticalSolution.find(find)
+      .populate({
+        path: "wl_product",
+        select: "_id wl_name wl_link wl_images wl_category wl_categories",
+      })
+      .sort({ wl_featured_megamenu: -1, wl_order: 1, wl_updated_at: -1 })
+      .lean();
 
-  return res.json({ ok: true, data: rows });
-});
+    return res.json({ ok: true, data: rows });
+  })
+);
 
-router.put("/vertical-solutions/reorder", requireAuth(["admin", "editor"]), async (req, res) => {
-  const { orderedIds = [] } = req.body;
+router.put(
+  "/vertical-solutions/reorder",
+  requireAuth(["admin", "editor"]),
+  asyncHandler(async (req, res) => {
+    const { orderedIds = [] } = req.body;
 
-  if (!Array.isArray(orderedIds) || !orderedIds.length) {
-    return res.status(422).json({ ok: false, error: "orderedIds inválido." });
-  }
-
-  for (const id of orderedIds) {
-    if (!isObjId(id)) {
-      return res.status(422).json({ ok: false, error: `ID inválido: ${id}` });
+    if (!Array.isArray(orderedIds) || !orderedIds.length) {
+      return res.status(422).json({ ok: false, error: "orderedIds inválido." });
     }
-  }
 
-  const ops = orderedIds.map((id, idx) => ({
-    updateOne: { filter: { _id: id }, update: { $set: { wl_order: idx } } },
-  }));
+    for (const id of orderedIds) {
+      if (!isObjId(id)) {
+        return res.status(422).json({ ok: false, error: `ID inválido: ${id}` });
+      }
+    }
 
-  await WaveledVerticalSolution.bulkWrite(ops);
+    const ops = orderedIds.map((id, idx) => ({
+      updateOne: { filter: { _id: id }, update: { $set: { wl_order: idx } } },
+    }));
 
-  return res.json({ ok: true, data: { saved: true } });
-});
+    await WaveledVerticalSolution.bulkWrite(ops);
+
+    return res.json({ ok: true, data: { saved: true } });
+  })
+);
 
 router.post(
   "/vertical-solutions",
   requireAuth(["admin", "editor"]),
   upload.single("image"),
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { title, description = "", productId = "", featured = "false" } = req.body;
 
     if (!title?.trim()) return res.status(422).json({ ok: false, error: "Título obrigatório." });
@@ -144,14 +156,14 @@ router.post(
     });
 
     return res.status(201).json({ ok: true, data: doc });
-  }
+  })
 );
 
 router.put(
   "/vertical-solutions/:id",
   requireAuth(["admin", "editor"]),
   upload.single("image"),
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { id } = req.params;
     if (!isObjId(id)) return res.status(422).json({ ok: false, error: "ID inválido." });
 
@@ -172,50 +184,62 @@ router.put(
 
     await doc.save();
     return res.json({ ok: true, data: doc });
-  }
+  })
 );
 
-router.delete("/vertical-solutions/:id", requireAuth(["admin", "editor"]), async (req, res) => {
-  const { id } = req.params;
-  if (!isObjId(id)) return res.status(422).json({ ok: false, error: "ID inválido." });
+router.delete(
+  "/vertical-solutions/:id",
+  requireAuth(["admin", "editor"]),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    if (!isObjId(id)) return res.status(422).json({ ok: false, error: "ID inválido." });
 
-  await WaveledVerticalSolution.deleteOne({ _id: id });
-  return res.json({ ok: true, data: { deleted: true } });
-});
+    await WaveledVerticalSolution.deleteOne({ _id: id });
+    return res.json({ ok: true, data: { deleted: true } });
+  })
+);
 
 /* ============================================================
  * TAB 2 — Megamenu Banners CRUD + reorder
  * ============================================================ */
 
-router.get("/megamenu-banners", requireAuth(["admin", "editor"]), async (_req, res) => {
-  const rows = await WaveledMegaMenuBanner.find({})
-    .populate({ path: "wl_product", select: "_id wl_name wl_link wl_images" })
-    .sort({ wl_order: 1, wl_updated_at: -1 })
-    .lean();
-  return ok(res, rows);
-});
+/** ✅ GET público (sem login) */
+router.get(
+  "/megamenu-banners",
+  asyncHandler(async (_req, res) => {
+    const rows = await WaveledMegaMenuBanner.find({})
+      .populate({ path: "wl_product", select: "_id wl_name wl_link wl_images" })
+      .sort({ wl_order: 1, wl_updated_at: -1 })
+      .lean();
+    return ok(res, rows);
+  })
+);
 
-router.put("/megamenu-banners/reorder", requireAuth(["admin", "editor"]), async (req, res) => {
-  const { orderedIds = [] } = req.body;
-  if (!Array.isArray(orderedIds) || !orderedIds.length) return errJson(res, "orderedIds inválido.", 422);
+router.put(
+  "/megamenu-banners/reorder",
+  requireAuth(["admin", "editor"]),
+  asyncHandler(async (req, res) => {
+    const { orderedIds = [] } = req.body;
+    if (!Array.isArray(orderedIds) || !orderedIds.length) return errJson(res, "orderedIds inválido.", 422);
 
-  for (const id of orderedIds) {
-    if (!isObjId(id)) return errJson(res, `ID inválido: ${id}`, 422);
-  }
+    for (const id of orderedIds) {
+      if (!isObjId(id)) return errJson(res, `ID inválido: ${id}`, 422);
+    }
 
-  const ops = orderedIds.map((id, idx) => ({
-    updateOne: { filter: { _id: id }, update: { $set: { wl_order: idx } } },
-  }));
-  await WaveledMegaMenuBanner.bulkWrite(ops);
+    const ops = orderedIds.map((id, idx) => ({
+      updateOne: { filter: { _id: id }, update: { $set: { wl_order: idx } } },
+    }));
+    await WaveledMegaMenuBanner.bulkWrite(ops);
 
-  return ok(res, { saved: true });
-});
+    return ok(res, { saved: true });
+  })
+);
 
 router.post(
   "/megamenu-banners",
   requireAuth(["admin", "editor"]),
   upload.single("image"),
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { title = "", description = "", productId = "" } = req.body;
     if (!req.file) return errJson(res, "Imagem obrigatória.", 422);
 
@@ -230,14 +254,14 @@ router.post(
     });
 
     return ok(res, doc, 201);
-  }
+  })
 );
 
 router.put(
   "/megamenu-banners/:id",
   requireAuth(["admin", "editor"]),
   upload.single("image"),
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { id } = req.params;
     if (!isObjId(id)) return errJson(res, "ID inválido.", 422);
 
@@ -256,34 +280,42 @@ router.put(
 
     await doc.save();
     return ok(res, doc);
-  }
+  })
 );
 
-router.delete("/megamenu-banners/:id", requireAuth(["admin", "editor"]), async (req, res) => {
-  const { id } = req.params;
-  if (!isObjId(id)) return errJson(res, "ID inválido.", 422);
+router.delete(
+  "/megamenu-banners/:id",
+  requireAuth(["admin", "editor"]),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    if (!isObjId(id)) return errJson(res, "ID inválido.", 422);
 
-  await WaveledMegaMenuBanner.deleteOne({ _id: id });
-  return ok(res, { deleted: true });
-});
+    await WaveledMegaMenuBanner.deleteOne({ _id: id });
+    return ok(res, { deleted: true });
+  })
+);
 
 /* ============================================================
  * TAB 3 — Home Specials (4 slots) UPSERT por slot
  * ============================================================ */
 
-router.get("/home-specials", requireAuth(["admin", "editor"]), async (_req, res) => {
-  const rows = await WaveledHomeSpecial.find({})
-    .populate({ path: "wl_product", select: "_id wl_name wl_link wl_images" })
-    .sort({ wl_slot: 1 })
-    .lean();
-  return ok(res, rows);
-});
+/** ✅ GET público (sem login) */
+router.get(
+  "/home-specials",
+  asyncHandler(async (_req, res) => {
+    const rows = await WaveledHomeSpecial.find({})
+      .populate({ path: "wl_product", select: "_id wl_name wl_link wl_images" })
+      .sort({ wl_slot: 1 })
+      .lean();
+    return ok(res, rows);
+  })
+);
 
 router.put(
   "/home-specials/:slot",
   requireAuth(["admin", "editor"]),
   upload.single("image"),
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const slot = Number(req.params.slot);
     if (![1, 2, 3, 4].includes(slot)) return errJson(res, "Slot inválido (1..4).", 422);
 
@@ -304,9 +336,7 @@ router.put(
 
     if (imageUrl) setDoc.wl_image = imageUrl;
 
-    const setOnInsert = {
-      wl_slot: slot,
-    };
+    const setOnInsert = { wl_slot: slot };
 
     if (!imageUrl) {
       setOnInsert.wl_image = "https://via.placeholder.com/800x800?text=Upload";
@@ -319,48 +349,52 @@ router.put(
     );
 
     return ok(res, doc);
-  }
+  })
 );
 
 /* ============================================================
  * TAB 4 — Category Page Builder (GET/PUT por categoryId)
  * ============================================================ */
 
-router.get("/category-pages/:categoryId", requireAuth(["admin", "editor"]), async (req, res) => {
-  const { categoryId } = req.params;
-  if (!isObjId(categoryId)) return errJson(res, "categoryId inválido.", 422);
+/** ✅ GET público (sem login) — isto corrige o teu /shop sem estar logado */
+router.get(
+  "/category-pages/:categoryId",
+  asyncHandler(async (req, res) => {
+    const { categoryId } = req.params;
+    if (!isObjId(categoryId)) return errJson(res, "categoryId inválido.", 422);
 
-  const doc = await WaveledCategoryPage.findOne({ wl_category: categoryId })
-    .populate({ path: "wl_category", select: "_id wl_name wl_slug" })
-    .populate({
-      path: "top_solutions.solution",
-      select: "_id wl_title wl_image wl_featured_megamenu wl_order wl_product",
-      populate: { path: "wl_product", select: "_id wl_name wl_link wl_images" },
-    })
-    .populate({
-      path: "most_used_solutions.solution",
-      select: "_id wl_title wl_image wl_order wl_product",
-      populate: { path: "wl_product", select: "_id wl_name wl_link wl_images" },
-    })
-    .populate({ path: "featured_product.product", select: "_id wl_name wl_link wl_images" })
-    .populate({ path: "slider_solutions.product", select: "_id wl_name wl_link wl_images" })
-    .populate({ path: "two_special_products.product", select: "_id wl_name wl_link wl_images" })
-    .lean();
+    const doc = await WaveledCategoryPage.findOne({ wl_category: categoryId })
+      .populate({ path: "wl_category", select: "_id wl_name wl_slug" })
+      .populate({
+        path: "top_solutions.solution",
+        select: "_id wl_title wl_image wl_featured_megamenu wl_order wl_product",
+        populate: { path: "wl_product", select: "_id wl_name wl_link wl_images" },
+      })
+      .populate({
+        path: "most_used_solutions.solution",
+        select: "_id wl_title wl_image wl_order wl_product",
+        populate: { path: "wl_product", select: "_id wl_name wl_link wl_images" },
+      })
+      .populate({ path: "featured_product.product", select: "_id wl_name wl_link wl_images" })
+      .populate({ path: "slider_solutions.product", select: "_id wl_name wl_link wl_images" })
+      .populate({ path: "two_special_products.product", select: "_id wl_name wl_link wl_images" })
+      .lean();
 
-  if (!doc) {
-    return ok(res, {
-      wl_category: categoryId,
-      top_solutions: [],
-      featured_product: { product: null, images: [], title: "", description: "" },
-      slider_solutions: [],
-      two_special_products: [],
-      videos: [],
-      most_used_solutions: [],
-    });
-  }
+    if (!doc) {
+      return ok(res, {
+        wl_category: categoryId,
+        top_solutions: [],
+        featured_product: { product: null, images: [], title: "", description: "" },
+        slider_solutions: [],
+        two_special_products: [],
+        videos: [],
+        most_used_solutions: [],
+      });
+    }
 
-  return ok(res, doc);
-});
+    return ok(res, doc);
+  })
+);
 
 router.put(
   "/category-pages/:categoryId",
@@ -370,7 +404,7 @@ router.put(
     { name: "slider_images", maxCount: 20 },
     { name: "two_special_images", maxCount: 2 },
   ]),
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { categoryId } = req.params;
     if (!isObjId(categoryId)) return errJson(res, "categoryId inválido.", 422);
 
@@ -406,9 +440,7 @@ router.put(
         product: payload?.featured_product?.product || null,
         title: String(payload?.featured_product?.title || ""),
         description: String(payload?.featured_product?.description || ""),
-        images: Array.isArray(payload?.featured_product?.images)
-          ? payload.featured_product.images
-          : [],
+        images: Array.isArray(payload?.featured_product?.images) ? payload.featured_product.images : [],
       },
 
       slider_solutions: normalizeOrder(payload.slider_solutions || []).map((x, idx) => ({
@@ -471,38 +503,46 @@ router.put(
     );
 
     return ok(res, doc);
-  }
+  })
 );
 
 /* ============================================================
  * TAB 5 — Application Areas CRUD
  * ============================================================ */
 
-router.get("/application-areas", requireAuth(["admin", "editor"]), async (_req, res) => {
-  const rows = await WaveledApplicationAreas.find({})
-    .populate({ path: "areas.solutions.product", select: "_id wl_name wl_link wl_images" })
-    .sort({ wl_updated_at: -1 })
-    .lean();
-  return ok(res, rows);
-});
+/** ✅ GET público (sem login) */
+router.get(
+  "/application-areas",
+  asyncHandler(async (_req, res) => {
+    const rows = await WaveledApplicationAreas.find({})
+      .populate({ path: "areas.solutions.product", select: "_id wl_name wl_link wl_images" })
+      .sort({ wl_updated_at: -1 })
+      .lean();
+    return ok(res, rows);
+  })
+);
 
-router.post("/application-areas", requireAuth(["admin", "editor"]), async (req, res) => {
-  const { solution_title } = req.body;
-  if (!solution_title?.trim()) return errJson(res, "solution_title obrigatório.", 422);
+router.post(
+  "/application-areas",
+  requireAuth(["admin", "editor"]),
+  asyncHandler(async (req, res) => {
+    const { solution_title } = req.body;
+    if (!solution_title?.trim()) return errJson(res, "solution_title obrigatório.", 422);
 
-  const doc = await WaveledApplicationAreas.create({
-    wl_solution_title: solution_title.trim(),
-    areas: [],
-  });
+    const doc = await WaveledApplicationAreas.create({
+      wl_solution_title: solution_title.trim(),
+      areas: [],
+    });
 
-  return ok(res, doc, 201);
-});
+    return ok(res, doc, 201);
+  })
+);
 
 router.put(
   "/application-areas/:id",
   requireAuth(["admin", "editor"]),
   upload.any(),
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { id } = req.params;
     if (!isObjId(id)) return errJson(res, "ID inválido.", 422);
 
@@ -549,15 +589,19 @@ router.put(
 
     await doc.save();
     return ok(res, doc);
-  }
+  })
 );
 
-router.delete("/application-areas/:id", requireAuth(["admin", "editor"]), async (req, res) => {
-  const { id } = req.params;
-  if (!isObjId(id)) return errJson(res, "ID inválido.", 422);
+router.delete(
+  "/application-areas/:id",
+  requireAuth(["admin", "editor"]),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    if (!isObjId(id)) return errJson(res, "ID inválido.", 422);
 
-  await WaveledApplicationAreas.deleteOne({ _id: id });
-  return ok(res, { deleted: true });
-});
+    await WaveledApplicationAreas.deleteOne({ _id: id });
+    return ok(res, { deleted: true });
+  })
+);
 
 export default router;
